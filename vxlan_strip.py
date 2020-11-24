@@ -13,14 +13,15 @@ logger = logging.getLogger()
 
 
 class VxlanDecap(object):
-    def __init__(self, veth_base, mirror_iface, destroy_on_exit=None):
+    def __init__(self, veth_base, mirror_iface, destroy_on_exit=None, filter=None):
         self.destroy = destroy_on_exit
+        self.filter = filter
 
         self.create_veth_pair(f"{veth_base}_in", f"{veth_base}_out")
-        self.capture = self.open_tap_iface(mirror_iface)
+        self.capture = self.open_tap_iface(mirror_iface, filter=filter)
         self.mirror_iface = mirror_iface
 
-        # Open a raw socket
+        # Open a raw socket to send packets
         self.raw = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
         self.raw.bind((self.veth_in, 0))
 
@@ -63,13 +64,16 @@ class VxlanDecap(object):
         os.system(f"ip link del {in_name}")
 
     @staticmethod
-    def open_tap_iface(ifname, filter="udp dst port 4789"):
+    def open_tap_iface(ifname, filter):
         # FIXME: what does to_ms mean?
         if ifname.endswith(".pcap"):
             p = pcapy.open_offline(ifname)
         else:
             p = pcapy.open_live(ifname, VETH_MTU, True, 10)
-        p.setfilter(filter)
+        if filter:
+            p.setfilter(filter)
+        else:
+            logger.warning("No pcap filter set -- this is likely to break")
 
         return p
 
@@ -152,13 +156,23 @@ if __name__ == "__main__":
         help="create <veth_base>_in and <veth_base>_out as pair, default is veth_test",
         default="veth_test",
     )
+    parser.add_argument(
+        "-f",
+        "--filter",
+        dest="filter",
+        help="pcap filter to match desired vxlan traffic",
+        default="(udp dst port 4789) or (vlan and udp dst port 4789)",
+    )
 
     parser.set_defaults(destroy_on_exit=None)
 
     args = parser.parse_args()
 
     x = VxlanDecap(
-        args.veth_base, args.capture_interface, destroy_on_exit=args.destroy_on_exit
+        args.veth_base,
+        args.capture_interface,
+        destroy_on_exit=args.destroy_on_exit,
+        filter=args.filter,
     )
 
     x.run()
